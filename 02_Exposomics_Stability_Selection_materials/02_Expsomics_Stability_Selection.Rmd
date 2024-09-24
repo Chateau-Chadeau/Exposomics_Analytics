@@ -1,0 +1,664 @@
+---
+output:
+  pdf_document:
+    number_sections: true
+    latex_engine: xelatex
+    template: "svm-latex-ms.tex"
+linkcolor: black
+fontsize: 11pt
+header-includes:  
+  \ProvidesPackage{custom-fonts}
+  \usepackage{fontspec}
+  \setmainfont{ImperialSansText-Regular.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  
+    ]
+  \newfontface\boldfont{ImperialSansText-Bold.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  ]
+  \usepackage{amsfonts}
+  \usepackage{amsmath}
+  \usepackage{graphicx}
+  \newcommand{\benum}{\begin{enumerate}}
+  \newcommand{\eenum}{\end{enumerate}}
+  \onehalfspacing
+  \usepackage{tcolorbox}
+  \setlength{\parindent}{0pt}
+---
+
+```{=tex}
+\vspace{5pt}
+\begin{center}
+\includegraphics[width=150pt]{ICL_Logo_Blue_RGB.pdf}
+\end{center}
+\vspace{10pt}
+\definecolor{coolblack}{rgb}{0, 0.1373, 0.5843}
+\begin{tcolorbox}[colback=coolblack,colframe=coolblack]
+\bfseries \scshape \fontsize{22}{22}\selectfont\raggedright \vspace{5pt}
+\centering \textcolor{white}{ Exposomics Analytics - Practical 1 \\
+OMICS Profiling}\\ \vspace{5pt}
+\end{tcolorbox}
+```
+  \tableofcontents
+
+\clearpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=50),tidy=TRUE)
+```
+
+\boldfont
+
+# Overview of the Practical
+
+\normalfont
+
+In this practical you will be familiarized with the concept of stability selection, the automated calibration via the stability score, and its advantages over traditional K-fold cross-validation. You will learn how to simulate realistic study populations using the fake package and how to conduct stability enhanced variable selection, partial least squares analysis and network estimation using the sharp package. This session can be decomposed into two parts:
+
+```{=tex}
+
+\\
+
+1. Simulation study \\
+By comparing the cross-validated and stability selection LASSO / Graphical LASSO, we will consolidate the principles of variable selection and investigate differences in selection performance, i.e. the ability to identify true predictors / true relationships (edges).
+
+\\
+
+2. Real world data application \\
+Utilizing data from a nested case-cohort study we will use stability enhanced OMICS profiling methods to investigate the association between pre-diagnostic inflammatory proteins and the incidence of B-cell lymphoma (LASSO), its subtypes (sPLS). Additionally, we will utilise the Stability Selection Graphical LASSO to explore the conditional independence structure between inflammatory proteins and smoking-related transcripts using data from the Italian component of the European Prospective Investigation into Cancer and Nutrition (EPIC) and the Norwegian Women and Cancer Study (NOWAC) cohorts. 
+```
+\boldfont
+
+# Simulation Study
+
+\normalfont
+
+\boldfont
+
+## Data description
+
+The data in this workshop is generated using the fake package available on CRAN.
+
+First we simulate a multivariate normal study populations with n observations (individuals) and p independent attributes (predictors), where a proportion of these features predict a binary health outcome. The level of noise in our data is controlled via the expected proportion of variance in the outcome explained by the true predictors.
+
+\boldfont
+
+## Stability enhanced Variable Selection
+
+\normalfont
+
+\boldfont
+
+### Simulate Population
+
+\normalfont
+
+We will simulate a study population with 1000 individuals and 200 proteins measured, of which an expected proportion of 0.05 are jointly associated with a binary disease status, for instance lung cancer.
+
+```{r, fig.height=6, fig.width=8, out.width="70%", fig.align="center", tidy = FALSE}
+
+# Load packages
+LoadPackages=function(packages){
+  for (i in 1:length(packages)){
+    suppressPackageStartupMessages(library(packages[i], character.only=TRUE))
+  }
+}
+
+LoadPackages(c("sharp",
+               "glmnet",
+               "tidyverse",
+               "pheatmap",
+               "mltools",
+               "data.table"))
+
+source("Scripts/Exposomics_viz.R") # custom visualisation functions
+
+# Simulate Population
+set.seed(1234)
+simul <- fake::SimulateRegression(n = 1000, # number of individuals
+                            pk = 200, # number of predictors
+                            nu_xy = 0.05, # expected probability of true predictors
+                            ev_xy = 0.7, # expected proportion of explained variance
+                            family = "binomial", # binary outcome
+                            beta_abs = c(1),  # vector of effect sizes
+                            continuous = FALSE # sample betas from vector
+                            )
+
+# Dataframe of n = 1000 people with 200 predictors
+pheatmap(simul$xdata,
+         cluster_rows=FALSE,
+         cluster_cols=FALSE,
+         legend = T)
+
+# amount of true predictors
+sum(simul$theta) 
+
+# names of true predictors
+rownames(simul$theta)[which(simul$theta == 1)]
+
+# investigate betas
+simul$beta
+
+```
+
+\boldfont
+
+### Cross-validation LASSO
+
+\normalfont
+
+We will start by running the classical cross-validated LASSO. In this approach, the data is partitioned into multiple folds, where each fold is sequentially held out for validation while the model is trained on the remaining folds. The regularization parameter, $\lambda$, is optimized by minimizing the average prediction error across all validation folds.
+
+We will use our simulated ydata as a binary health outcome and our simulated xdata as penalized predictors. If we wanted to include some variables as confounders, without penalizing them, this can be done using the argument \texttt{penalty.factor}, which ensures that the confounders are always selected in the LASSO models. The \texttt{family} parameter determines the model family, i.e. \texttt{"gaussian"} for normally distributed continuous outcomes and \texttt{"binomial"} for binary outcomes.
+
+\clearpage
+
+\textbf{Challenge:} Run the LASSO regression described above (i.e. with xdata as predictors and ydata as the outcome). List the variables selected in the model calibrated by cross validation minimising the Binomial Deviance.
+
+ 
+
+The LASSO model can be run and calibrated using the \texttt{cv.glmnet()} function from the \texttt{glmnet} package:
+
+\small
+
+```{r,fig.height=6, fig.width=8, out.width="70%", fig.align="center"}
+# Cross-validation
+set.seed(1)
+t0=Sys.time()
+mymodel <- cv.glmnet(x=simul$xdata, y=simul$ydata, family="binomial", type.measure = "deviance")
+t1=Sys.time()
+print(t1-t0)
+
+# print cross-validation calibration
+plot(mymodel)
+plot.cv_calibration(mymodel, model = "lasso")
+
+```
+
+The set of selected proteins can be extracted as follows:
+
+\small
+
+```{r, fig.height=6, fig.width=8, out.width="70%", fig.align="center"}
+# Selected variables
+beta_lasso <- coef(mymodel, s="lambda.min")[1:ncol(simul$xdata)+1,]
+selected_lasso <- names(beta_lasso)[which(beta_lasso!=0)]
+print(paste0(length(selected_lasso), " variables are selected"))
+print(selected_lasso)
+
+# Correctly identified predictors
+print(selected_lasso[selected_lasso %in% names(simul$theta[which(simul$theta == 1),])])
+
+# Falsely selected variables
+print(selected_lasso[!(selected_lasso %in% names(simul$theta[which(simul$theta == 1),]))])
+
+# We can investigate the regularisation paths by plotting the beta values at a given lambda
+
+plot.reg_paths(mymodel$xdata, mymodel, calibration = "lambdahat", simul)
+
+```
+
+The cross-validated LASSO identifies true predictors from noise variables via the regularisation paths. At a given lambda, all coefficients that are estimated to be non-zero are selected. In this case, even with good calibration, the LASSO would not able to identify a large proportion of true predictors (recall), without necessarily having to include a lot of noise variables, compromising the accuracy of the predicted positives (precision).
+
+Additionally Cross-validation findings are unstable; if you run this model multiple times using different seeds, you might get slightly different results. In stability selection, the variable selection algorithm (the LASSO in this example) is applied on different subsamples of the data and all results are aggregated. The output of a stability selection model is less likely to vary when it is run multiple times with different seeds. It is increasingly stable with the number of iterations.
+
+Challenge: Run the cross-validation model multiple times with different seeds, can you observe instability?
+
+```{=tex}
+\normalsize
+\boldfont
+```
+### Stability Selection LASSO
+
+\normalfont
+
+The stability selection LASSO can be run using the \texttt{VariableSelection()} function, defined in the sharp package. This function is internally using the \texttt{glmnet()} function to get the LASSO results for different values of the penalty parameter $\lambda$ across different subsamples of the data. The \texttt{penalty.factor} and \texttt{family} arguments can be set as in the \texttt{glmnet} package. The parameter \texttt{K} defines the number of iterations (i.e. the number of subsamples on the data on which the model is fitted), and \texttt{tau} defines the size of the subsample (0.5 is optimal according to simulation studies).
+
+ 
+
+For each level of penalization $\lambda$ the results are aggregated; variable importance is encoded in the selection proportions across subsamples. Next, the stability score is calculated across a range of penalty parameters $\lambda$ and selection proportions $\pi$, above which a variable is considered stably selected. The stability score is defined under the null hypothesis of equiprobability of selection proportions; for the most uninformative model each variable exhibits the same importance.
+
+\small
+```{r warning=FALSE}
+t0 = Sys.time()
+stab <- VariableSelection(xdata = simul$xdata,
+                          ydata = simul$ydata,
+                          family = "binomial",
+                          n_cat = 3,
+                          pi_list = seq(0.5, 1, by = 0.01))
+```
+\normalsize
+
+The pair of parameters (penalty $\lambda$ and threshold in selection proportion $\pi$) are jointly calibrated to maximise the stability score:
+
+\small
+
+```{r, fig.height= 8, fig.width=12, out.width="100%", fig.align="center"}
+par(mar= c(8,8,8,8))
+CalibrationPlot(stab)
+
+```
+
+\normalsize
+
+In this calibration plot, the stability score is colour-coded, the different values of the penalty $\lambda$ are on the X-axis (the corresponding average number of variables selected is also reported) and different thresholds in selection proportion $\pi$ are on the Y-axis.
+
+\small
+
+```{r, fig.height=7, fig.width=12, out.width="80%", fig.align="center"}
+# Calibrated selection proportions 
+selprop <- SelectionProportions(stab)
+print(selprop)
+
+# Stably selected predictors
+print((Stable(stab)[which(Stable(stab) == 1)]))
+
+# Calibrated parameters
+hat_params = Argmax(stab)
+print(hat_params)
+
+# Visualisation of selection proportions
+plot(stab)
+plot.selection_performance(stab, theta = simul$theta)
+```
+
+\normalsize
+
+Using this simulated example we can show that stability selection is able to distinguish most true predictors from the other variables. Here we plot the stability paths of each variable, i.e. their selection proportion at a given the level of penalization $\lambda$. True predictors are overall more stable; they are selected more often across subsamples and remain selected longer with increasing penalty $\lambda$.
+
+\small
+
+```{r, fig.height=7, fig.width=12, out.width="80%", fig.align="center"}
+# Stability paths
+plot.stab_paths(stab, simul)
+```
+
+We observe that stability selection seems to improve the contrast between true predictors and noise variables, however even here some true predictors would only be detected after including noise variables. Hence, our calibrations aims to identify the best balance between precision and recall predetermined by the stability paths.
+
+
+We refit the model to obtain the coefficients. Ideally, we would split our data into 3 parts; variable selection, model training, model testing. However, for simplicity we simply refit and test on the full data.
+
+\small
+```{r}
+# refit model
+refit <- Refit(simul$xdata, simul$ydata, stability = stab, Lambda = 0)
+
+# test predictive performance
+roc <- ExplanatoryPerformance(simul$xdata, simul$ydata, new_xdata = simul$xdata, new_ydata = simul$ydata, stability = stab, Lambda = 0)
+
+# plot roc curve
+plot(roc)
+
+# test incremental performance by stability
+
+inc <- Incremental(xdata = simul$xdata, ydata = simul$ydata, new_xdata = simul$xdata, new_ydata = simul$ydata, stability = stab, Lambda = 0, n_predictors = 20)
+
+# plot IncrementalPlot
+plot(inc)
+```
+\normalsize 
+
+The Incremental Plot demonstrates that as variables are added sequentially based on their selection proportion (variable importance), the amount of new information increases initially, but reaches a plateau shortly after the inclusion of variables in the calibrated model.
+
+\boldfont
+
+## Stability enhanced Graphical Model
+
+\normalfont
+
+Next we simulate a study population of n = 1000 people and p = 200 measured proteins. Here we simulate multivariate normal data with an underlying network structure.
+
+```{r}
+# Parameters of the simulation
+n <- 1000
+p <- 100
+
+# Network simulation
+set.seed(1)
+simul_g <- SimulateGraphical(n = n, pk = p, topology = "scale-free", nu_within = 0.05)
+```
+
+\small
+
+```{r, fig.height=6, fig.width=6, out.width="60%", fig.align="center"}
+# Simulated (true) conditional independence structure
+pheatmap(simul_g$theta, cluster_rows = FALSE, cluster_cols = FALSE, color = c("ivory", "red"), legend = FALSE)
+```
+
+\normalsize
+
+The red entries indicate the presence of an edge between the two nodes (i.e. a "1" in the adjacency matrix). The true network can also be visualised using the code below:
+
+\small
+
+```{r, fig.height=6, fig.width=6, out.width="70%", fig.align="center"}
+# Simulated (true) graph structure
+true_g <- Graph(simul_g$theta)
+par(mar = rep(0, 4))
+plot(true_g, layout = layout_with_kk(true_g))
+```
+
+\normalsize
+
+The \textsf{Graph()} function is generating an igraph object. The node/edge colours, size, etc can be adjusted using syntax from the igraph package.
+
+ 
+
+The data was simulated so that the partial correlation between the variables correspond to the structure of this graph. The simulated data is stored in "data" in the "simul" object:
+
+\small
+
+```{r}
+head(simul_g$data)
+```
+
+\normalsize
+
+\boldfont
+### Cross-validated Graphical LASSO
+\normalfont
+\small
+
+```{r}
+# Required packages
+if (!require("glasso")) install.packages("glasso")  # For graphical lasso
+if (!require("glassoFast")) install.packages("glassoFast")  # Efficient Graphical Lasso
+if (!require("glmnet")) install.packages("glmnet")  # Cross-validation and lasso support
+if (!require("corpcor")) install.packages("corpcor")  # Inverse covariance matrix calculation
+if (!require("mvtnorm")) install.packages("mvtnorm")  # Simulate multivariate normal data
+
+# K-fold cross-validated Graphical LASSO using BIC
+cv_graphical_lasso_bic <- function(data, lambda_seq, K = 10) {
+  
+  # Number of observations and features
+  n <- nrow(data)
+  p <- ncol(data)
+  
+  # Generate fold indices for K-fold cross-validation
+  set.seed(123)
+  folds <- sample(1:K, size = n, replace = TRUE)
+  
+  # Initialize vector to store average BIC values across folds for each lambda
+  avg_BIC_values <- numeric(length(lambda_seq))
+  
+  # Loop through lambda values
+  for (i in seq_along(lambda_seq)) {
+    lambda <- lambda_seq[i]
+    
+    # Initialize vector to store BIC for each fold
+    fold_BIC <- numeric(K)
+    
+    # Cross-validation: loop through each fold
+    for (k in 1:K) {
+      # Split data into training and test sets
+      train_data <- data[folds != k, ]
+      test_data <- data[folds == k, ]
+      
+      # Calculate covariance matrix from training data
+      S_train <- cov(train_data)
+      
+      # Fit Graphical LASSO using training data
+      glasso_fit <- glasso(S_train, rho = lambda)
+      
+      # Calculate the precision matrix (inverse covariance matrix)
+      theta <- glasso_fit$wi
+      
+      # Log-likelihood using the test data's covariance matrix
+      S_test <- cov(test_data)
+      log_likelihood <- nrow(test_data) * (sum(log(eigen(theta, symmetric = TRUE)$values)) - sum(S_test * theta))
+      
+      # Number of non-zero elements in the precision matrix
+      non_zero_elements <- sum(abs(theta[upper.tri(theta)]) > 1e-5)
+      
+      # BIC calculation for this fold
+      fold_BIC[k] <- -2 * log_likelihood + log(nrow(test_data)) * non_zero_elements
+    }
+    
+    # Average BIC across all K folds
+    avg_BIC_values[i] <- mean(fold_BIC)
+  }
+  
+  # Find the lambda that minimizes the average BIC
+  best_lambda <- lambda_seq[which.min(avg_BIC_values)]
+  
+  # Refit the Graphical LASSO on the full dataset using the best lambda
+  S_full <- cov(data)
+  best_glasso_fit <- glasso(S_full, rho = best_lambda)
+  
+  # Plot Calibration Curve (Lambda vs Average BIC)
+  plot(lambda_seq, avg_BIC_values, type = "b", pch = 19, col = "blue",
+       xlab = expression(lambda), ylab = "Average BIC", main = "Calibration Curve: Lambda vs Average BIC")
+  abline(v = best_lambda, col = "red", lty = 2)  # Add vertical line for best lambda
+  legend("topright", legend = paste("Best Lambda =", round(best_lambda, 3)), lty = 2, col = "red")
+  
+  list(
+    best_lambda = best_lambda,
+    precision_matrix = best_glasso_fit$wi,
+    avg_BIC_values = avg_BIC_values
+  )
+}
+
+# Define a sequence of lambda values to try
+Lambda <- LambdaGridGraphical(xdata = simul_g$data, Lambda_cardinal = 100, max_density = 0.9, tau = 1)
+
+# Run cross-validated graphical lasso with BIC calibration (10-fold cross-validation)
+result <- cv_graphical_lasso_bic(simul_g$data, Lambda, K = 10)
+
+# Output the best lambda and precision matrix
+print(paste("Best lambda:", result$best_lambda))
+print("Precision Matrix:")
+print(result$precision_matrix)
+
+# Challenge: Plot the calibrated Graph
+
+```
+\normalsize
+
+\boldfont
+
+### Stability Selection Graphical LASSO
+
+\normalfont
+\small
+```{r}
+# Run unconstrained Stability Graphical LASSO 
+stab_g <- GraphicalModel(simul_g$data, n_cat = 3, pi_list = seq(0.5,0.99, by = 0.01))
+
+# plot 
+plot(Graph(Adjacency(stab_g)))
+
+# CalibrationPlot
+CalibrationPlot(stab_g)
+
+# Compare to ground truth
+plot(SelectionPerformanceGraph(stab_g, simul_g))
+
+# Run constrained Stability Graphical LASSO 
+stab_g_constrained <- GraphicalModel(simul_g$data, n_cat = 3, pi_list = seq(0.5,0.99, by = 0.01), PFER_thr = 30)
+
+# plot 
+plot(Graph(Adjacency(stab_g_constrained)))
+
+# CalibrationPlot
+CalibrationPlot(stab_g_constrained)
+
+# Compare to ground truth
+plot(SelectionPerformanceGraph(stab_g_constrained, simul_g))
+```
+
+\normalfont
+
+\boldfont
+
+# Real world data application
+
+\normalfont
+
+In this section we will compare the cross-validated and stability selection calibration on LASSO, sPLS and Graphical LASSO models. For this purpose, we will load the respective data and you will be asked to explore the respective implementations in the sharp package.
+
+\boldfont
+
+## LASSO
+
+\normalfont
+
+\small
+
+```{r}
+suppressPackageStartupMessages(library(glmnet))
+suppressPackageStartupMessages(library(dplyr))
+
+# Load data
+covars=readRDS("Data/Covariates.rds")
+proteins=readRDS("Data/Proteins.rds")
+proteins_denoised=readRDS("Data/Proteins_denoised.rds")
+
+X <- as.matrix(proteins_denoised)
+Y <- covars$type
+
+### run crossvalidated LASSO
+set.seed(1)
+
+Folds(cbind(X))
+cv_logistic_auc <- cv.glmnet(X, Y, family = "binomial", type.measure = "auc", foldid = fold_data$fold_ids)
+
+# Plot cross-validation calibration
+plot(cv_logistic_auc)
+
+# return coefficients at 1 se away from the lambda with max cross-validation AUC
+cv_logistic_auc$lambda.1se
+
+coefficients_logit_1se <- coef(cv_logistic_auc, s=cv_logistic_auc$lambda.1se)
+
+non_zero_index <- coefficients_logit_1se@i
+non_zero_coefficients <- coefficients_logit_1se@x
+cbind(c("Intercept",colnames(proteins_denoised)[non_zero_index]),non_zero_coefficients)
+
+### Run Stability Selection LASSO
+
+ stab <- VariableSelection(X, Y, family = "binomial", n_cat = 3, pi_list = seq(0.5,0.99, by = 0.01))
+
+# plot(stab)
+ plot(stab)
+
+# CalibrationPlot(stab)
+ CalibrationPlot(stab)
+ 
+# Explanatory performance
+ roc <- ExplanatoryPerformance(X,Y,stability = stab, Lambda = 0)
+ plot(roc)
+ 
+ roc$AUC
+ 
+# Incremental Plot
+ inc <- Incremental(X,Y,stability = stab, Lambda = 0, n_predictors = 28)
+ plot(inc)
+  
+```
+
+\normalsize
+
+\boldfont
+
+## sPLS
+
+\normalfont
+
+\small
+
+```{r}
+# Load data
+
+suppressPackageStartupMessages(library(sgPLS))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(utils))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(mixOmics))
+
+X_pooled=readRDS("Data/Proteins_denoised.rds")
+covars=readRDS("Data/Covariates.rds")
+Y_pooled=covars$type
+
+# run cross-validated sPLS
+
+source("Scripts/pls_functions.R")
+set.seed(1)
+res_splsda=CalibratesPLSDA(dataX=X_pooled, dataY=Y_pooled, ncomp=1, Nrepeat=5)
+
+# plot calibration
+PlotCalib(res=res_splsda)
+
+#refit PLS
+set.seed(1)
+res_sgplsda=CalibratesgPLSDA(dataX = X_pooled, dataY = Y_pooled, ncomp = 1, Nrepeat = 5)
+
+# Stability Selection sPLS
+
+stab_pls <- BiSelection(X, Y, family = "binomial", LambdaX = seq_len(ncol(X) - 1), implementation = SparsePLS)
+
+CalibrationPlot(stab_pls)
+summary(stab_pls)
+
+# plot results (binary outcome)
+g <- Graph(stab_pls)
+if (any(is.na(V(g)$shape))) {
+  V(g)$shape[is.na(V(g)$shape)] <- "circle"
+}
+V(g)$shape <- "circle"  
+plot(g, vertex.shape = V(g)$shape, vertex.color = "lightblue", vertex.size = 30)
+```
+
+\normalsize
+
+\boldfont
+
+## Graphical LASSO
+
+\normalfont
+
+\small
+
+```{r}
+# Load data
+proteins <- readRDS("Data/Proteins_selected_denoised_re.rds")
+transcripts <- readRDS("Data/Transcripts_log_transformed.rds")
+x <- proteins
+
+# Define a sequence of lambda values to try
+Lambda <- LambdaGridGraphical(xdata = simul_g$data, Lambda_cardinal = 100, max_density = 0.9, tau = 1)
+
+# Run cross-validated graphical lasso with BIC calibration (10-fold cross-validation)
+result <- cv_graphical_lasso_bic(simul_g$data, Lambda, K = 10)
+
+# Output the best lambda and precision matrix
+print(paste("Best lambda:", result$best_lambda))
+print("Precision Matrix:")
+print(result$precision_matrix)
+
+# Stability Selection Graphical LASSO
+stab_prot_network <- GraphicalModel(x, n_cat = 3, pi_list = seq(0.5,0.99, by = 0.01))
+
+# Plot protein network
+plot(stab_prot_network)
+
+# CalibrationPlot of the protein network
+CalibrationPlot(stab_prot_network)
+
+# Multi-omics Stability Selection Graphical LASSO
+x_multi <- merge(proteins, transcripts, by = "row.names", row.names = 1)
+rownames(x_multi) <- x_multi$Row.names
+x_multi <- x_multi[, -1]
+
+stab_multi_network <- GraphicalModel(x_multi, n_cat = 3, pi_list = seq(0.5,0.99, by = 0.01), pk = c(ncol(proteins), ncol(transcripts)), PFER_thr = 30)
+
+# Plot multi-omics network
+plot(stab_multi_network)
+
+# CalibrationPlot of the multi-omics network
+CalibrationPlot(stab_multi_network)
+```
+
+\normalsize
