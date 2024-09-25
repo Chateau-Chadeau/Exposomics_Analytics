@@ -1,0 +1,539 @@
+---
+output:
+  pdf_document:
+    number_sections: true
+    latex_engine: xelatex
+    template: "svm-latex-ms.tex"
+linkcolor: black
+fontsize: 11pt
+header-includes:  
+  \ProvidesPackage{custom-fonts}
+  \usepackage{fontspec}
+  \setmainfont{ImperialSansText-Regular.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  
+    ]
+  \newfontface\boldfont{ImperialSansText-Bold.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  ]
+  \usepackage{amsfonts}
+  \usepackage{amsmath}
+  \usepackage{graphicx}
+  \newcommand{\benum}{\begin{enumerate}}
+  \newcommand{\eenum}{\end{enumerate}}
+  \onehalfspacing
+  \usepackage{tcolorbox}
+  \setlength{\parindent}{0pt}
+---
+
+```{=tex}
+\vspace{5pt}
+\begin{center}
+\includegraphics[width=150pt]{ICL_Logo_Blue_RGB.pdf}
+\end{center}
+\vspace{10pt}
+\definecolor{coolblack}{rgb}{0, 0.1373, 0.5843}
+\begin{tcolorbox}[colback=coolblack,colframe=coolblack]
+\bfseries \scshape \fontsize{22}{22}\selectfont\raggedright \vspace{5pt}
+\centering \textcolor{white}{ Exposomics Analytics - Practical 3 \\
+Clustering}\\ \vspace{5pt}
+\end{tcolorbox}
+```
+
+\tableofcontents
+
+\clearpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=50),tidy=TRUE)
+```
+
+\boldfont
+
+# Overview of the Practical
+
+\normalfont
+
+In this practical, we will explore a variety of clustering techniques to highlight the unique features and performance of different approaches. You’ll gain hands-on experience with computing various similarity metrics, selecting clustering algorithms tailored to the structure of your data, and implementing them effectively in R. Additionally, you’ll learn how to determine the optimal number of clusters using a range of calibration methods, ensuring robust model performance.
+
+This practical will also guide you through identifying key variables driving the clustering, enhancing interpretability. We will introduce the Consensus Clustering approach from the \textsf{sharp} package, where you’ll see how clustering calibration based on stability can enhance the robustness of your model. This approach ensures that the identified clusters are reproducible and reliable, offering critical insights into the underlying patterns in your data.Finally, You'll validate your clustering results by analyzing cluster characteristics and linking them to relevant health outcomes.
+
+This session can be decomposed into four parts:
+
+```{=tex}
+
+1. Data Preprocessing \\
+We will discuss how to prepare different datasets for clustering analysis. You will learn to appreciate the differences between distance and similarity metrics, how to deal with heterogeneous data: how to calculate similarities/distances for categorical and numeric data and transform the data for distance and model-based methods. 
+
+2. Clustering Algorithms \\
+In this section we will apply various classes of clustering algorithms to simulated data and learn how to calibrate the optimal number of clusters and assess clustering performance. You will further learn how to compare the clustering assignment of different methods and to the simulated ground truth.
+
+3. Stability Consensus Clustering \\
+In this section you will be introduced to the Stability Consensus Clustering implemented in the sharp package. Using a simulated example, we will compare the clustering performance between a single run of hierarchical clustering and the stability selection consensus clustering.
+
+4. Cluster Analysis \\
+In this section you will learn how to describe your clusters using regression methods, investigating variables driving the cluster assignment as well as validating the clusters by relating them to health outcomes.
+
+```
+\boldfont
+# Data processing
+\normalfont
+
+```{=tex}
+
+Clustering is a mathematical dimensionality reduction technique for grouping data points based on similarity or distance into well-separated groups, but its success is heavily dependent on proper data preprocessing. Here, we explore various distance and similarity metrics, data transformations, and key preprocessing steps needed to handle mixed and high-dimensional data effectively.
+```
+
+\boldfont
+## Similarity and Distance metrics
+\normalfont
+
+```{=tex}
+
+\textsf{Distance Metrics}
+
+Selecting the appropriate distance metric is crucial for clustering. Below are some common distance measures:
+
+\begin{itemize}
+    \item \textsf{Euclidean Distance}: Measures straight-line distance between points in an n-dimensional space:
+    \[
+    d(p, q) = \sqrt{\sum_{i=1}^{n} (p_i - q_i)^2}
+    \]
+    While commonly used, it can be sensitive to the scale of data, so normalization is often necessary.
+    
+    \item \textsf{Manhattan Distance (L1 norm)}: Computes the sum of absolute differences between coordinates:
+    \[
+    d(p, q) = \sum_{i=1}^{n} |p_i - q_i|
+    \]
+    Manhattan distance is more robust to outliers and often used in high-dimensional data contexts.
+
+    \item \textsf{Mahalanobis Distance}: Accounts for correlations between variables and scales:
+    \[
+    d_M(p, q) = \sqrt{(p - q)^T \Sigma^{-1} (p - q)}
+    \]
+    Ideal when data has varying scales or correlated variables.
+\end{itemize}
+
+\textsf{Similarity Metrics}
+
+For categorical or binary data, similarity measures may be more appropriate than distance metrics:
+
+\begin{itemize}
+    \item \textsf{Pearson’s Correlation}: Captures linear relationships between variables, often used in clustering when similarity is more important than magnitude.
+    
+    \item \textsf{Spearman’s Correlation}: A rank-based measure that assesses monotonic relationships, offering more robustness against outliers.
+
+    \item \textsf{Jaccard’s Coefficient}: Used for binary data, it compares the overlap between two sets:
+    \[
+    J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+    \]
+    
+    \item \textsf{Sørensen–Dice Coefficient}: Similar to Jaccard but gives more weight to shared elements, useful for sparse datasets.
+\end{itemize}
+
+\textsf{Handling Mixed Data: Gower Dissimilarity}
+
+For datasets containing both numeric and categorical variables, \textsf{Gower Dissimilarity} is an effective measure. It combines:
+
+\begin{itemize}
+    \item Normalized Manhattan distance for numeric data
+    \item Match/mismatch for categorical variables
+    \item Jaccard’s coefficient for binary data
+\end{itemize}
+
+This metric ensures that mixed data types can be clustered in a meaningful way.
+
+\textsf{High-Dimensional Data Considerations}
+
+High-dimensional data presents challenges for clustering due to the "curse of dimensionality." Techniques such as Principal Component Analysis (PCA) or feature selection can reduce dimensions and improve clustering performance. Additionally, distance metrics like Manhattan or Mahalanobis distances are less sensitive to high-dimensionality issues than Euclidean distance.
+
+To understand the data set better, it is often helpful to view it in a lower dimension. It should be noted that this presents linear separation only, does not account for all of the variance (just the first two PCs), and is not the only way to model high dimensional data in low dimension.
+
+Let's have a look at a simulated dataset people and calculate different distance metrics.
+
+Using the \textsf{sharp} package we can simulate a study population with 3 clusters, of c(100,100,200) people, where an expected proportion of $nu\textunderscore xc$ features contribute to the clustering. To controll the noise the expected proportion of variance in each of the contributing attributes that can be explained by the clustering is set to $ev\textunderscore xc = 0.5$.
+
+```
+
+
+```{r}
+suppressPackageStartupMessages(library(sharp))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(fpc))
+suppressPackageStartupMessages(library(cluster))
+suppressPackageStartupMessages(library(mclust))
+suppressPackageStartupMessages(library(factoextra))
+suppressPackageStartupMessages(library(randomcoloR))
+suppressPackageStartupMessages(library(aricode))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(mltools))
+# suppressPackageStartupMessages(library(rCOSA))
+
+source("Scripts/Exposomics_viz.R")
+
+# Simulate Clustering data set
+clust <- SimulateClustering(n = c(100,100,200), pk = 10, nu_xc = 1, ev_xc = 0.5)
+
+# Visualise data structure using PCA
+autoplot(prcomp(clust$data))
+
+# Pearsons Correlation
+cor <- cor(t(clust$data))
+pheatmap(cor)
+
+# Spearman Rank Correlation
+spearman_cor <- cor(t(clust$data), method = "spearman")
+pheatmap(spearman_cor)
+
+# Euclidean distance
+euclidean_dist <- dist(clust$data, method = "euclidean")
+pheatmap(euclidean_dist)
+
+# Manhattan distance
+manhattan_dist <- dist(clust$data, method = "manhattan")
+pheatmap(manhattan_dist)
+
+```
+
+\boldfont
+## Scaling and Data Transformations
+\normalfont
+
+Most clustering algorithms calculate distance, requiring the data to be scaled to remove the impact of the scale of each individual metric.
+Preprocessing transforms data into a suitable format for clustering:
+
+```{=tex}
+
+\begin{itemize}
+    \item \textsf{Scaling}: To ensure variables with larger ranges don’t dominate the clustering, Z-score normalization or min-max scaling is applied.
+    
+    \item \textsf{Rank Inverse Transformation}: For highly skewed numeric data, applying a rank inverse transformation (ranking the data followed by an inverse normal transformation) ensures better distribution for clustering algorithms.
+
+    \item \textsf{One-Hot Encoding}: Categorical variables can be converted into binary format for algorithms like k-means, which only accept numeric inputs. While useful, this can lead to increased dimensionality, which may need to be managed.
+\end{itemize}
+
+```
+
+For instance, Environmental exposures may be extremely skewed - as they are bounded by 0 on the left and an unbounded on the right. To avoid skewed data after scaling, the numeric variables will be rank inverse normal transformed using the formula below:
+
+```{r}
+rank.inverse = function(x){qnorm((rank(x,na.last="keep")-0.5)/sum(!is.na(x)))}
+```
+
+
+To demonstrate this, we will simulate right skewed data and plot it:
+
+```{r}
+skewed_normal = rbeta(10000,2,5)
+
+hist(skewed_normal)
+
+```
+
+After scaling (normalization), the skew remains:
+
+```{r}
+hist(scale(skewed_normal))
+```
+
+After rank inverse transformation, the skew disappears:
+
+```{r}
+hist(rank.inverse(skewed_normal))
+```
+While binary variables are not suited for a non-parametric method, they can be normalized (z transformation).
+
+Using the Cleaveland Heart Disease dataset, we will demonstrate; 
+
+```{r}
+heart <- read.csv("Data/heart.csv")
+target <- heart$target
+heart <- heart %>% mutate(
+  age = as.numeric(age),
+  sex = as.factor(sex),
+  cp =  as.factor(cp),
+  trestbps = as.numeric(trestbps),
+  chol = as.numeric(chol),
+  exang = as.numeric (exang),
+  oldpeak = as.numeric(oldpeak),
+  slope = as.factor(slope),
+  ca = as.factor(ca),
+  thal = as.factor(thal),
+  target = NULL
+)
+
+
+heart_one_hot <- cbind(
+  rank.inverse(heart[,sapply(heart, is.numeric)]),
+  scale(model.matrix(~ -1 + . , data = heart[,sapply(heart, is.factor)])
+))
+
+
+```
+
+This equalizes the standard deviations between the scaled numeric and categorical variables, stopping those with larger sd from having an outsized impact. 
+
+```{r}
+# standard deviations before transformation and scaling
+apply(heart,2,sd)
+
+# standard deviation after transformation and scaling
+apply(heart_one_hot,2,sd)
+```
+
+\boldfont
+# Clustering algorithms
+\normalfont
+
+Clustering algorithms can be broadly categorized into four main types:
+
+- Connectivity-based
+- Centroid-based
+- Distribution-based
+- Density-based
+
+In this section, we will explore several popular clustering algorithms from these categories: 
+- Hierarchical Clustering (Connectivity-based)
+- K-Means (Centroid-based)
+- Gaussian Mixture Models (Distribution-based)
+-DBSCAN (Density-based)
+
+We will cover the principles behind each method and provide practical implementation examples in R.
+
+To assess the performance of the clustering and calibrate the optimal number of clusters K we will use different statistical measures for internal validity;
+
+- The Silhouette score, which measures how similar an object is to its own cluster compared to other clusters. A higher score indicates better-defined clusters. The silhouette score ranges from -1 to 1, with negative values denoting poorly classified solutions, 0 indicated overlapping clusters, and positive values denoting separated clusters.
+
+- The Within Cluster Sum Square, which will decrease as K will increase, so an inflection point must be selected visually.
+
+- The Gap statistic, which compares the total intracluster variation for different values of
+K with their expected values under a null reference distribution of the data.
+
+- For Gaussian Mixture Models, BIC can be used to select the optimal number of components. A lower BIC value indicates a better fit
+
+
+```{r}
+
+# K-means
+set.seed(123) 
+
+clust_kmeans <- kmeans(clust$data, centers = 3, nstart = 20)
+
+# Calculate silhouette scores
+silhouette_scores <- silhouette(clust_kmeans$cluster, dist(clust$data))
+
+# Plot silhouette scores
+plot(silhouette_scores, main = "Silhouette Plot for K-Means")
+
+# Calibrate Cluster number K using the Elbow metod
+fviz_nbclust(clust$data, kmeans, method = "wss")
+
+# Calibrate Cluster number K using the Gap statistic
+k_means_gap_stat <- clusGap(clust$data, FUN = kmeans, K.max = 10, B = 100)
+
+plot(k_means_gap_stat)
+
+# Hierarchical clustering
+dist_matrix <- dist(clust$data, method = "euclidean")
+
+clust_hc <- hclust(dist_matrix)
+
+# Plot the dendrogram
+plot(clust_hc, main = "Hierarchical Clustering Dendrogram")
+
+# Calibrate using the Silhouette score
+fviz_nbclust(clust$data, FUN = hcut, method = "silhouette")
+
+# Calibrate using the Gap Statistic
+fviz_nbclust(clust$data, FUN = hcut, method = "wss")
+
+# Calibrate using the Gap Statistic
+fviz_nbclust(clust$data, FUN = hcut, method = "gap")
+
+# Retrieve cluster 
+clusters <- cutree(clust_hc, k = 3)
+
+# Gaussian mixture modelling
+clust_gmm <- Mclust(clust$data, G = 3)
+summary(clust_gmm)
+
+# Calibrate using the BIC
+bic_values <- sapply(1:10, function(i) Mclust(clust$data, G = i)$bic)
+
+# Plot BIC values
+plot(1:10, bic_values, type = "b", main = "BIC for GMM", xlab = "Number of Components", ylab = "BIC")
+
+# DBSCAN
+clust_dbscan <- dbscan(clust$data, eps = 0.01)
+
+print(clust_dbscan)
+
+# Add cluster information to the data
+dbscan_cluster <- as.factor(clust_dbscan$cluster)
+
+# Plot
+dbscan <- as.data.frame(cbind(clust$data, dbscan_cluster))
+autoplot(prcomp(dbscan), col = dbscan$dbscan_cluster)
+
+```
+
+\boldfont
+# Stability Consensus Clustering
+\normalfont
+
+Using a simulated study population, we will demonstrate the concept of consensus clustering implemented in \textsf{sharp}.
+
+We simulate a population of n = 1000 individuals and p = 40 exposures, split into G = 5 clusters, $N_1$ = 200, $N_2$= 200, $N_3$ = 200, $N_4$ = 200, $N_5$ = 200. Out of the p = 40 exposures, q = 10 exposures contribute to the cluster separation at a decreasing explained variance ev_xc = (0.70 0.65 0.60 0.55 0.50 0.45 0.40 0.35 0.30 0.25).
+
+
+```{r, fig.height=6, fig.width=8, out.width="70%", fig.align="center"}
+# Simulate Clusters 
+set.seed(1)
+simul <- SimulateClustering(n = c(200, 200, 200, 200, 200),
+                                 pk = 40,
+                                 theta_xc = c(rep(1, 10), rep(0, 30)),
+                                 ev_xc = c(seq(0.7, 0.25, by = -0.05), rep(0,30))
+                                 )
+
+# dataframe of n = 1000 people and 40 exposures
+Heatmap(simul$data, cluster_rows = F, cluster_cols = F)
+
+# Correlation matrix across features
+pheatmap(cor((simul$data)))
+
+# Correlation matrix across observations
+pheatmap(cor(t(simul$data)))
+
+```
+In this simulated example we know the true number of clusters, their respective size and each individuals cluster assignments. However, typically we do not know the underlying latent data structure; neither how many clusters there are nor who belongs to which cluster.
+
+We have to first create Clusters using clustering algorithms. However, Cluster memberships may be inconsistent across different subsamples, and cluster initialisations, especially for noisy high-dimensional data, making the findings ungeneralisable to the general population. Consensus Clustering and Stability selection aim to improve the reliability of clusters, even if the noise level is unknown. Further, we can use stability selection to calibrate the optimal number of clusters based on our data.
+
+The stability enhanced Consensus Clustering can be run using the \textsf{Clustering()} function, defined in the sharp package. For each number of clusters G, the results from clustering across multiple subsamples are aggregated. The function internally runs the in the \textsf{implementation} argument specified clustering algorithm across different subsamples. The co-membership proportion between two observations denotes how likely two individuals are to be part of the same cluster. The number of clusters G is calibrated by calculating a stability score under the null hypothesis of equiprobability of co-membership proportions; we are looking for the number of clusters that exhibit the most stable co-membership proportions overall.
+
+However, this procedure is extremely computationally expensive and time consuming. Hence it is often not feasible, not even for our simulated data. To demonstrate the comparison between a single hierarchical clustering run and the stability enhanced hierarchical consensus clustering, we will use a smaller toy dataset with G = 3 clusters, 5 exposures, which all contribute to the clustering at an explained variance of 0.6.
+
+```{r, fig.height=6, fig.width=8, out.width="70%", fig.align="center", message=FALSE, results= 'hide'}
+
+# Simulation of data with clusters
+set.seed(1)
+n <- c(20, 50, 30)
+simul_small <- SimulateClustering(
+  n = n,
+  pk = 5,
+  nu_xc = 1,
+  ev_xc = 0.6
+)
+x <- simul_small$data
+
+# Hierarchical clustering
+mydist <- as.matrix(dist(x))
+myhclust <- hclust(dist(x), method = "complete")
+hclustorder <- myhclust$order
+
+# Consensus clustering
+t0=Sys.time()
+stab_clust <- Clustering(xdata = x, implementation = HierarchicalClustering)
+t1=Sys.time()
+print(t1-t0)  
+
+# Stability score by number of clusters
+plot(stab_clust$Sc)
+hat_N <- which.max(stab_clust$Sc)
+shclust <- hclust(as.dist(1 - ConsensusMatrix(stab_clust)), method = stab_clust$methods$linkage)
+shclust <- as.hclust(rev(as.dendrogram(shclust)))
+
+# Compare cluster assignments
+plot_clustering_comparison(myhclust, shclust, simul_small)
+```
+
+Not all features necessarily contribute meaningfully to clustering, and including irrelevant features can lead to poorer performance or misleading results. To address this, we can use sparse clustering algorithms, which induce sparsity by selecting only the most relevant features during the clustering process. This allows the model to focus on the variables that truly drive the clustering structure.
+
+The \textsf{sharp} package provides an effective way to calibrate this procedure using stability selection, which enhances the reliability of variable selection by repeatedly sampling the data and assessing the consistency of feature selection.
+
+To demonstrate this, we simulate a dataset in which only 50% of the variables are expected to contribute to the clustering. The clustering structure accounts for 50% of the variance in these contributing features, allowing us to clearly illustrate how sparse clustering can isolate the important variables and discard irrelevant ones, improving the overall clustering performance.
+
+The use of the sharp package ensures that the most stable and informative features are selected, yielding more robust and interpretable clustering results.
+
+```{r, fig.height=6, fig.width=8, out.width="70%", fig.align="center", message=FALSE, results= 'hide'}
+
+# # Simulation of data with clusters
+# set.seed(1)
+# n <- c(20, 50, 30)
+# simul_small <- SimulateClustering(
+#   n = n,
+#   pk = 20,
+#   nu_xc = 0.5,
+#   ev_xc = 0.5
+# )
+# x <- simul_small$data
+# 
+# # Consensus clustering
+# t0=Sys.time()
+# stab_clust <- Clustering(xdata = x, implementation = HierarchicalClustering)
+# t1=Sys.time()
+# print(t1-t0)  
+# 
+# plot(stab_clust$Sc)
+# hat_N <- which.max(stab_clust$Sc)
+# shclust <- hclust(as.dist(1 - ConsensusMatrix(stab_clust)), method = stab_clust$methods$linkage)
+# shclust <- as.hclust(rev(as.dendrogram(shclust)))
+
+# Consensus clustering with penalisation
+# 
+# # stab_clust_sparse <- Clustering(xdata = x, implementation = HierarchicalClustering, Lambda = LambdaSequence(lmin = 0.1, lmax = 10, cardinal = 10))
+# 
+# CalibrationPlot(stab_clust_sparse)
+# 
+# plot(stab_clust_sparse$Sc)
+# hat_N <- which.max(stab_clust_sparse$Sc)
+# shclust_sparse <- hclust(as.dist(1 - ConsensusMatrix(stab_clust_sparse)), method = stab_clust$methods$linkage)
+# shclust_sparse <- as.hclust(rev(as.dendrogram(shclust_sparse)))
+# 
+# # Compare cluster assignments
+# plot_clustering_comparison(sh_clust, shclust)
+```
+
+\boldfont
+# Cluster Analysis
+\normalfont
+
+We can use Stability Selection LASSO to determine the variable importance of the exposures in driving the cluster assignment. Since it is available, we will use the true cluster assignments denoted as \textsf{theta} as our clusters to be characterized.
+
+For each of the G = 5 clusters, the \textsf{VariableSelection()} function available in the sharp package can be used to identify a sparse set of exposures that together is informative in characterizing the cluster. For this purpose, we convert \textsf{theta} into a one-hot-encoded dataset of cluster assignments.
+
+
+\small
+
+```{r, fig.height=3, fig.width=12, out.width="80%", fig.align="center", results= 'hide', message=FALSE}
+
+# Create one-hot-encoded dataset of cluster assignments
+theta <- as.factor(simul$theta)
+ydata<- one_hot(as.data.table(theta))
+
+# Run Stability Selection LASSO for each cluster
+t0=Sys.time()
+stab <- lapply(ydata, FUN = function(ydata){
+  stab <- VariableSelection(x = simul$data,
+                                 y = ydata,
+                                 family = "binomial",
+                                 n_cat = 3,
+                                 pi_list = seq(0.5, 1, by = 0.01))})
+t1=Sys.time()
+print(t1-t0)  
+
+# Plot selection proportions per cluster
+lapply(stab, FUN = plot)
+
+```
+
+\normalsize
+
+We can then use the clusters to investigate cluster-specific disease risk using simple univariate regression.
+
+Challenge: Use a simple clustering algorithm of your choice as well as the consensus clustering provided in sharp to analyse the heart dataset, investigate which variables are driving the clustering and estimate the cluster specific risk of heart disease.
