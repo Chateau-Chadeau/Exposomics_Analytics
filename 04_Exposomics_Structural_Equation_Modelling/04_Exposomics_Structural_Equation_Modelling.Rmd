@@ -1,0 +1,416 @@
+---
+output:
+  pdf_document:
+    number_sections: true
+    latex_engine: xelatex
+    template: "svm-latex-ms.tex"
+linkcolor: black
+fontsize: 11pt
+header-includes:  
+  \ProvidesPackage{custom-fonts}
+  \usepackage{fontspec}
+  \setmainfont{ImperialSansText-Regular.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  
+    ]
+  \newfontface\boldfont{ImperialSansText-Bold.ttf}[
+        Path = ./,  
+        Extension = .ttf,  
+        UprightFont = *  ]
+  \usepackage{amsfonts}
+  \usepackage{amsmath}
+  \usepackage{graphicx}
+  \newcommand{\benum}{\begin{enumerate}}
+  \newcommand{\eenum}{\end{enumerate}}
+  \onehalfspacing
+  \usepackage{tcolorbox}
+  \setlength{\parindent}{0pt}
+---
+
+```{=tex}
+\vspace{5pt}
+\begin{center}
+\includegraphics[width=150pt]{ICL_Logo_Blue_RGB.pdf}
+\end{center}
+\vspace{10pt}
+\definecolor{coolblack}{rgb}{0, 0.1373, 0.5843}
+\begin{tcolorbox}[colback=coolblack,colframe=coolblack]
+\bfseries \scshape \fontsize{22}{22}\selectfont\raggedright \vspace{5pt}
+\centering \textcolor{white}{ Exposomics Analytics - Practical 4 \\
+Structural Equation Modelling}\\ \vspace{5pt}
+\end{tcolorbox}
+```
+
+\tableofcontents
+
+\clearpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=50),tidy=TRUE)
+```
+
+\boldfont
+
+# Overview of the Practical
+
+\normalfont
+
+In this practical, you will engage with key concepts of \textsf{causal inference} and \textsf{structural equation modelling (SEM)}, tools essential for disentangling complex relationships in epidemiological research. The primary aim of structural causal models is to investigate the \textsf{total}, \textsf{direct}, and \textsf{indirect effects} of an exposure on disease outcomes, expanding beyond the capabilities of traditional regression models, which are confined to investigating conditional associations.
+
+By using \textsf{directed acyclic graphs (DAGs)}, we can represent causal hypotheses between variables, helping to identify which variables must be adjusted for in statistical models to ensure accurate causal estimates. Correctly distinguishing between \textsf{confounders}, \textsf{mediators}, and \textsf{colliders} allows researchers to avoid biases and uncover both direct and indirect causal pathways in complex systems.
+
+An important application is within the \textsf{exposome framework}, where both the }external exposome}—representing life-course exposures such as environmental factors or lifestyle—and the \textsf{internal exposome}—reflecting an individual's current biological state—jointly contribute to disease development. Given the assumption of \textsf{temporality}, the external exposome precedes and influences the internal exposome, which in turn affects disease risk. Using SEM and DAGs, you will learn to estimate the direct and indirect effects of these exposures, addressing both the total impact and the pathways through which they operate.
+
+This practical will deepen your understanding of causal inference while equipping you with the skills to apply these techniques in high-dimensional molecular epidemiological data, where temporal and causal relationships are key to understanding disease etiology. Importantly, because we cannot fully rule out residual unmeasured confounding, the estimated direct and indirect effects should not be interpreted as definitive causal estimates. Instead, they represent attributable risks contingent on the covariates included in our model. 
+
+&nbsp;
+
+This practical is divided into three sections:
+
+&nbsp;
+
+```{=tex}
+1.\textsf{Causal Effect Estimation}
+   - In this practical, we will begin with a simple simulated example to investigate the impact of conditioning on a confounder, a mediator, and a collider on effect estimation. We will also illustrate the concepts of the back-door and front-door criteria.
+
+2.\textsf{Sufficient Adjustment Set Determination}
+   - Next, we will utilize more complex directed acyclic graphs (DAGs) to determine the necessary adjustment set required for estimating total, direct, and indirect effects of a given variable.
+
+3.\textsf{High-Dimensional Mediation Analysis}
+   - Finally, we will identify minimally sufficient adjustment sets in a high-dimensional context using a reticular action model or a series of LASSO regressions, implemented through the \textsf{sharp} package.
+```
+
+
+\boldfont
+# Causal Effect Estimation
+\normalfont
+
+\boldfont
+## Confounder, Mediator, Collider
+\normalfont
+
+```{r}
+library(ggplot2)
+library(dagitty)
+library(ggdag)
+
+# Confounder DAG
+dag_confounder <- dagitty("dag { X -> Y; C -> X; C -> Y }")
+ggdag(dag_confounder, text = TRUE) +
+  theme_dag_blank() +
+  ggtitle("Confounder DAG")
+
+set.seed(123)
+n <- 1000
+C <- rnorm(n)
+X <- 0.5 * C + rnorm(n)
+Y <- 0.5 * C + 0.5 * X + rnorm(n)
+
+# Confounder Model
+model_unadjusted <- lm(Y ~ X)
+model_adjusted <- lm(Y ~ X + C)
+
+summary(model_unadjusted)
+summary(model_adjusted)
+
+
+# Mediator DAG
+dag_mediator <- dagitty("dag { X -> M -> Y }")
+ggdag(dag_mediator, text = TRUE) +
+  theme_dag_blank() +
+  ggtitle("Mediator DAG")
+
+set.seed(123)
+M <- 0.5 * X + rnorm(n)
+Y <- 0.5 * M + rnorm(n)
+
+# Mediator Model
+model_unadjusted <- lm(Y ~ X)
+model_adjusted <- lm(Y ~ X + M)
+
+summary(model_unadjusted)
+summary(model_adjusted)
+
+
+# Collider DAG
+dag_collider <- dagitty("dag { X -> C; Y -> C }")
+ggdag(dag_collider, text = TRUE) +
+  theme_dag_blank() +
+  ggtitle("Collider DAG")
+
+set.seed(123)
+C <- 0.5 * X + 0.5 * Y + rnorm(n)
+
+# Collider Model
+model_unadjusted <- lm(Y ~ X)
+model_adjusted <- lm(Y ~ X + C)
+
+summary(model_unadjusted)
+summary(model_adjusted)
+
+```
+
+\boldfont
+## Back-door criterion
+\normalfont
+
+```{r}
+
+# Correct Backdoor DAG
+dag_backdoor_correct <- dagitty("dag {
+  X -> Y
+  C1 -> X
+  C1 -> Y
+  C2 -> C1
+  C2 -> X
+}")
+
+# Plot the DAG
+ggdag(dag_backdoor_correct) +
+  theme_dag_blank() +
+  ggtitle("Correct Backdoor Criterion DAG (C1 Blocks the Path)")
+
+
+set.seed(123)
+n <- 1000
+
+# Generate confounders C1 and C2
+C2 <- rnorm(n)  # C2 only affects C1
+C1 <- 0.6 * C2 + rnorm(n)  # C1 affected by C2
+X <- 0.5 * C1 + 0.2 * C2 + rnorm(n)  # X affected by C1
+Y <- 0.7 * X + 0.6 * C1 + rnorm(n)  # Y affected by X and C1, but not by C2
+
+# Unadjusted Model (without controlling for confounders)
+model_unadjusted <- lm(Y ~ X)
+summary(model_unadjusted)
+
+# Adjusted Model (with C1 as the only confounder)
+model_adjusted_C1 <- lm(Y ~ X + C1)
+summary(model_adjusted_C1)
+
+# Adjusted Model (with both C1 and C2)
+model_adjusted_C1_C2 <- lm(Y ~ X + C1 + C2)
+summary(model_adjusted_C1_C2)
+
+```
+\textsf{Back-door Criterion}
+By adjusting on C1 we block all backdoor paths between X and Y, creating a sufficient adjustment set.
+
+The Backdoor Criterion ensures that there are no confounding biases when estimating the causal effect of \( X \) on \( Y \). To apply the backdoor criterion, a set of variables (called the backdoor adjustment set) must be identified to block all backdoor paths — paths that connect \( X \) and \( Y \) through confounders, excluding the direct causal path from \( X \) to \( Y \).
+
+\textsf{Backdoor Criterion Conditions:}
+
+1. No Direct Causal Path: The variable(s) you adjust for must not be descendants of \( X \) or \( Y \).
+2. Block All Backdoor Paths: A sufficient adjustment set must block all backdoor paths (i.e., paths from \( X \) to \( Y \) through confounders). A backdoor path is any path from \( X \) to \( Y \) that goes backward through a confounder.
+3. Not a Collider: Do not adjust for a collider (a variable where two arrows collide). Adjusting for a collider can open a new path, creating collider bias.
+
+\textsf{Approach:}
+
+- Identify the set of variables that can block all backdoor paths between \( X \) and \( Y \) to ensure an unbiased estimation of the causal effect.
+- The backdoor criterion is often satisfied by adjusting for confounders — common causes of both \( X \) and \( Y \).
+
+\boldfont
+## Front-door criterion
+\normalfont
+
+```{r}
+
+# Frontdoor DAG
+dag_frontdoor <- dagitty("dag {
+  U -> X
+  U -> Y
+  X -> M
+  M -> Y
+}")
+
+ggdag(dag_frontdoor) +
+  theme_dag_blank() +
+  ggtitle("Frontdoor Criterion DAG")
+
+# Simulation
+set.seed(123)
+U <- rnorm(n)  # Unmeasured confounder
+X <- 0.6 * U + rnorm(n)  # X influenced by U
+M <- 0.5 * X + rnorm(n)  # Mediator M influenced by X
+Y <- 0.7 * M + 0.6 * U + rnorm(n)  # Y influenced by both M and U
+
+# Frontdoor Adjustment
+# Step 1: Estimate the effect of X on M
+model_XM <- lm(M ~ X)
+summary(model_XM)
+
+# Step 2: Estimate the effect of M on Y
+model_MY <- lm(Y ~ M)
+summary(model_MY)
+
+# Step 3: Combine the effects from step 1 and step 2 to estimate the total effect
+effect_X_on_Y_via_M <- coef(model_XM)["X"] * coef(model_MY)["M"]
+effect_X_on_Y_via_M
+
+```
+\textsf{Front-door Criterion}
+The Front-door Criterion allows for causal estimation when there are unmeasured confounders between \( X \) and \( Y \), as long as there is a mediator that satisfies certain conditions. The mediator helps account for the indirect causal effect of \( X \) on \( Y \), bypassing the unmeasured confounding.
+
+\textsf{Frontdoor Criterion Conditions:}
+
+1. Mediation: There exists a mediator \( M \) that lies on the causal pathway between \( X \) and \( Y \) (i.e., \( X \rightarrow M \rightarrow Y \)).
+2. Unmeasured Confounding Between \( X \) and \( Y \): There is an unmeasured confounder \( U \) affecting both \( X \) and \( Y \), but \( U \) does not affect the mediator \( M \). This ensures the effect of \( X \) on \( M \) remains unconfounded.
+3. No Direct Path from \( X \) to \( Y \) (except through \( M \)): All effects of \( X \) on \( Y \) must go through \( M \). There should be no direct causal effect from \( X \) to \( Y \) not captured by the mediator.
+4. No Unmeasured Confounders Between \( M \) and \( Y \): There must be no unmeasured confounders between the mediator \( M \) and the outcome \( Y \).
+
+\textsf{Approach:}
+
+- The frontdoor criterion is useful when there is unmeasured confounding between \( X \) and \( Y \), but a mediator \( M \) is available that explains the indirect effect of \( X \) on \( Y \).
+- By controlling for the mediator, you can estimate the causal effect even in the presence of unmeasured confounders.
+
+\clearpage
+\textsf{Backdoor vs. Frontdoor Summary:}
+
+- Backdoor Criterion: Focuses on blocking backdoor paths (indirect connections through confounders) between \( X \) and \( Y \) to estimate the causal effect, by adjusting for confounders.
+- Frontdoor Criterion: Allows estimation in cases with unmeasured confounding by leveraging a mediator that helps bypass the confounding through an indirect pathway from \( X \) to \( Y \).
+
+\boldfont
+# Sufficient Adjustment Set Determination
+\normalfont
+
+In groups of four, you will work together to apply the principles of the frontdoor and backdoor criteria to real-world research questions, build causal diagrams (DAGs), and identify sufficient adjustment sets for estimating total and direct effects.
+
+&nbsp;
+
+Step 1: Develop a Research Question
+
+As a group, brainstorm and agree on a real-world research question that involves causal relationships. Potentially use some of your own research.
+
+Simple example research questions:
+- What is the causal effect of exercise on mental health?
+- How does education affect income, accounting for family background?
+
+&nbsp;
+
+Step 2: Define Your Variable Set
+
+Based on your research question, identify at least 5-6 key variables that are relevant to your causal inquiry. Ensure that you include potential confounders, mediators, colliders, and other relevant factors.
+
+Example variables for the exercise and mental health question might include:
+- \( X \) = Exercise Frequency
+- \( Y \) = Mental Health
+- \( C_1 \) = Socioeconomic Status
+- \( C_2 \) = Age
+- \( M \) = Sleep Quality
+
+&nbsp;
+
+Step 3: Construct a DAG
+
+Using your assumptions, sketch a directed acyclic graph (DAG) that represents the relationships between your variables. Use causal arrows to depict which variables influence others. Include direct causal paths, potential confounders, mediators, and colliders.
+
+Clearly label the nodes (variables) and arrows (causal relationships). You can use software tools such as DAGitty or pen and paper for this task.
+
+&nbsp;
+
+Step 4: Apply the Backdoor and Frontdoor Criteria
+
+Identify all possible backdoor paths between your exposure \( X \) and outcome \( Y \). Based on these paths, determine a sufficient adjustment set to block confounding and estimate the total causal effect of \( X \) on \( Y \).
+
+Next, consider any possible mediators in your DAG and apply the frontdoor criterion. Determine the sufficient adjustment set for identifying the direct effect of \( X \) on \( Y \), accounting for mediation.
+
+\clearpage
+
+Step 5: Challenge Each Other
+
+Once each group has identified their adjustment sets, break into pairs within the group. One pair should present their adjustment sets for the total and direct effects, while the other pair challenges them by proposing alternative adjustment sets or questioning their assumptions about confounders, colliders, and mediators.
+
+Rotate roles within the group so everyone has the opportunity to challenge the assumptions and explain their reasoning.
+
+&nbsp;
+
+Discussion Questions:
+- Why did you choose certain variables as confounders or mediators?
+- Did adjusting for any variables open new bias-inducing paths (e.g., collider bias)?
+- Were there any surprises or disagreements in determining the adjustment sets? How did your group resolve them?
+- How would unmeasured confounders or mis-specified causal relationships affect your results?
+
+Hint: You can check your result using the \textsf{adjustmentSets()} function in R, by specifying the \textsf{effect} argument you can derive adjustment sets for direct and total effects, respectively.
+
+\boldfont
+# High-dimensional Mediation Analysis
+\normalfont
+
+ On the basis of temporality, we hypothesize that exposure profiles cause specific molecular responses which in turn cause differences in disease risk. Hence, we have to investigate a) the direct effects of exposures and biomarkers on disease risk and b) the indirect effects of exposures on disease risk mediated via the measured biomarkers.
+Using a structural equation model (SEM) framework -- a series of stability selection LASSOs, we can identify a) direct effects of exposures and biomarkers on disease risk, b) mediation effects of exposures on disease risk. We have to run two sets of models with different research questions; 
+1. For each disease, conditional on all variables, exposures and biomarkers, which sparse set is jointly and )stably) predictive of / causes a disease? (direct effects) 
+2. For each biomarker, which set of exposures is jointly (and stably) predictive of / causes the biological variable? (indirect effects)
+
+As the fake package currently does not support simulating structural equation models with categorical variables, we will generate a study populagtion using continuous variables to illustrate the SEM framework. The principle remains the same.
+
+Let us simulate a study population with n = 1000 individuals with 5 exposure variables, 15 biological features and 3 health outcomes. Each variable has an explained variance of 0.7 by its predictors. The \texttt{SimulateStructural()} function available in the fake package can be used to simulate data based on a Structural Equation Model. The argument \texttt{pk} denotes how many variables are in each layer, i.e. pk = c(5,15,3). The \texttt{$nu\_between$} argument controls the probability that a variable is a true predictor.
+
+   
+
+We eun the Structural Equation Model as a series of Stability Selected LASSO regressions described above (i.e. for each disease using Expotypes and Biomarkers as predictors, and for each Biomarker using Expotypes as predictors). List the variables selected in each model calibrated by maximizing the stability score.
+
+\small
+```{r, fig.height=8, fig.width=12, out.width="80%", fig.align="center", results= 'hide', message=FALSE}
+# Simulation of data with underlying structural causal model
+library(sharp)
+library(igraph)
+
+set.seed(1)
+pk = c(5,15,3)
+simul_sem <- SimulateStructural(n = 1000, 
+                                pk = pk,
+                                nu_between = 0.3, 
+                                ev = 0.7)
+plot(simul_sem, edge.arrow.size = 0.3)
+
+```
+\normalsize
+
+\small
+```{r, fig.height=3, fig.width=12, out.width="80%", fig.align="center", results= 'hide', message=FALSE}
+## split the data into the Expotypes, Biological features and Health outcomes
+simul_sem_expo <- simul_sem$data[,1:5]
+simul_sem_bio <- simul_sem$data[,6:20]
+simul_sem_health <- simul_sem$data[,21:23]
+
+
+# Model direct effects on diseases conditional on all other variables 
+stab_sem_direct <- apply(simul_sem_health, 2, FUN = function(y){
+  VariableSelection(xdata = cbind(simul_sem_expo, simul_sem_bio),
+                    ydata = y,
+                    n_cat = 3,
+                    pi_list = seq(0.5, 1, by = 0.01))})
+
+lapply(stab_sem_direct, plot)
+
+# Model indirect effects of Expotypes on diseases by modelling direct effects of Expotypes on Biomarkers
+stab_sem_indirect <- apply(simul_sem_bio, 2, FUN = function(y){
+  VariableSelection(xdata = simul_sem_expo,
+                    ydata = y, 
+                    n_cat = 3,
+                    pi_list = seq(0.5, 1, by = 0.01))})
+
+lapply(stab_sem_indirect, plot)
+
+```
+\normalsize
+
+\small
+```{r, fig.height=8, fig.width=12, out.width="80%", fig.align="center", results= 'hide', message=FALSE}
+
+# Alternatively this edge-selection procedure can be run via the StructuralModel() function
+dag <- LayeredDAG(pk)
+
+plot(dag, edge.arrow.size = 0.3) 
+plot(simul_sem, edge.arrow.size = 0.3) 
+
+stab_sem <- StructuralModel(x = simul_sem$data,
+                            adjacency = dag,
+                            n_cat = 3,
+                            pi_list = seq(0.5, 1, by = 0.01))
+CalibrationPlot(stab_sem)
+plot(SelectionPerformanceGraph(Adjacency(stab_sem),simul_sem$theta), layout = layout.grid, edge.arrow.size = 0.3)
+```
+\normalsize
+
